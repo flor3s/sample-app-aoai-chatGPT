@@ -8,6 +8,21 @@ export async function conversationApi(options: ConversationRequest, abortSignal:
             "Content-Type": "application/json"
         },
         body: JSON.stringify({
+            messages: options.messages.filter((m) => m.role != 'image')
+        }),
+        signal: abortSignal
+    });
+
+    return response;
+}
+
+export async function dalleApi(options: ConversationRequest, abortSignal: AbortSignal): Promise<Response> {
+    const response = await fetch("/dalle", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
             messages: options.messages
         }),
         signal: abortSignal

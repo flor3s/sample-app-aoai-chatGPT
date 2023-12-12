@@ -55,6 +55,7 @@ export type ChatResponse = {
         title: string;
         date: string;
     }
+    image_url?: string;
     error?: any;
 }
 
@@ -92,4 +93,9 @@ export enum ChatHistoryLoadingState {
 export type ErrorMessage = {
     title: string,
     subtitle: string
+}
+
+export enum ModelType {
+    GPT_4 = "GPT 4",
+    DALL_E_3 = "DALL-E 3 (Preview)"
 }

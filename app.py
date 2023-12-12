@@ -4,13 +4,17 @@ import logging
 import requests
 import openai
 import copy
-from azure.identity import DefaultAzureCredential
+import time
 from base64 import b64encode
 from flask import Flask, Response, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 
-from backend.auth.auth_utils import get_authenticated_user_details
 from backend.history.cosmosdbservice import CosmosConversationClient
+
+from auth import jwt_required
+
+#set the log level to INFO.... this is necessary to capture the inputs in logs
+logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
@@ -35,28 +39,18 @@ DEBUG_LOGGING = DEBUG.lower() == "true"
 if DEBUG_LOGGING:
     logging.basicConfig(level=logging.DEBUG)
 
-# On Your Data Settings
-DATASOURCE_TYPE = os.environ.get("DATASOURCE_TYPE", "AzureCognitiveSearch")
-SEARCH_TOP_K = os.environ.get("SEARCH_TOP_K", 5)
-SEARCH_STRICTNESS = os.environ.get("SEARCH_STRICTNESS", 3)
-SEARCH_ENABLE_IN_DOMAIN = os.environ.get("SEARCH_ENABLE_IN_DOMAIN", "true")
-
 # ACS Integration Settings
 AZURE_SEARCH_SERVICE = os.environ.get("AZURE_SEARCH_SERVICE")
 AZURE_SEARCH_INDEX = os.environ.get("AZURE_SEARCH_INDEX")
 AZURE_SEARCH_KEY = os.environ.get("AZURE_SEARCH_KEY")
-AZURE_SEARCH_USE_SEMANTIC_SEARCH = os.environ.get("AZURE_SEARCH_USE_SEMANTIC_SEARCH", "false")
+AZURE_SEARCH_USE_SEMANTIC_SEARCH = os.environ.get("AZURE_SEARCH_USE_SEMANTIC_SEARCH", False)
 AZURE_SEARCH_SEMANTIC_SEARCH_CONFIG = os.environ.get("AZURE_SEARCH_SEMANTIC_SEARCH_CONFIG", "default")
-AZURE_SEARCH_TOP_K = os.environ.get("AZURE_SEARCH_TOP_K", SEARCH_TOP_K)
-AZURE_SEARCH_ENABLE_IN_DOMAIN = os.environ.get("AZURE_SEARCH_ENABLE_IN_DOMAIN", SEARCH_ENABLE_IN_DOMAIN)
+AZURE_SEARCH_TOP_K = os.environ.get("AZURE_SEARCH_TOP_K", 5)
+AZURE_SEARCH_ENABLE_IN_DOMAIN = os.environ.get("AZURE_SEARCH_ENABLE_IN_DOMAIN", "true")
 AZURE_SEARCH_CONTENT_COLUMNS = os.environ.get("AZURE_SEARCH_CONTENT_COLUMNS")
 AZURE_SEARCH_FILENAME_COLUMN = os.environ.get("AZURE_SEARCH_FILENAME_COLUMN")
 AZURE_SEARCH_TITLE_COLUMN = os.environ.get("AZURE_SEARCH_TITLE_COLUMN")
 AZURE_SEARCH_URL_COLUMN = os.environ.get("AZURE_SEARCH_URL_COLUMN")
-AZURE_SEARCH_VECTOR_COLUMNS = os.environ.get("AZURE_SEARCH_VECTOR_COLUMNS")
-AZURE_SEARCH_QUERY_TYPE = os.environ.get("AZURE_SEARCH_QUERY_TYPE")
-AZURE_SEARCH_PERMITTED_GROUPS_COLUMN = os.environ.get("AZURE_SEARCH_PERMITTED_GROUPS_COLUMN")
-AZURE_SEARCH_STRICTNESS = os.environ.get("AZURE_SEARCH_STRICTNESS", SEARCH_STRICTNESS)
 
 # AOAI Integration Settings
 AZURE_OPENAI_RESOURCE = os.environ.get("AZURE_OPENAI_RESOURCE")
@@ -75,43 +69,14 @@ AZURE_OPENAI_EMBEDDING_ENDPOINT = os.environ.get("AZURE_OPENAI_EMBEDDING_ENDPOIN
 AZURE_OPENAI_EMBEDDING_KEY = os.environ.get("AZURE_OPENAI_EMBEDDING_KEY")
 AZURE_OPENAI_EMBEDDING_NAME = os.environ.get("AZURE_OPENAI_EMBEDDING_NAME", "")
 
-# CosmosDB Mongo vcore vector db Settings
-AZURE_COSMOSDB_MONGO_VCORE_CONNECTION_STRING = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_CONNECTION_STRING")  #This has to be secure string
-AZURE_COSMOSDB_MONGO_VCORE_DATABASE = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_DATABASE")
-AZURE_COSMOSDB_MONGO_VCORE_CONTAINER = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_CONTAINER")
-AZURE_COSMOSDB_MONGO_VCORE_INDEX = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_INDEX")
-AZURE_COSMOSDB_MONGO_VCORE_TOP_K = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_TOP_K", AZURE_SEARCH_TOP_K)
-AZURE_COSMOSDB_MONGO_VCORE_STRICTNESS = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_STRICTNESS", AZURE_SEARCH_STRICTNESS)  
-AZURE_COSMOSDB_MONGO_VCORE_ENABLE_IN_DOMAIN = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_ENABLE_IN_DOMAIN", AZURE_SEARCH_ENABLE_IN_DOMAIN)
-AZURE_COSMOSDB_MONGO_VCORE_CONTENT_COLUMNS = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_CONTENT_COLUMNS", "")
-AZURE_COSMOSDB_MONGO_VCORE_FILENAME_COLUMN = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_FILENAME_COLUMN")
-AZURE_COSMOSDB_MONGO_VCORE_TITLE_COLUMN = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_TITLE_COLUMN")
-AZURE_COSMOSDB_MONGO_VCORE_URL_COLUMN = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_URL_COLUMN")
-AZURE_COSMOSDB_MONGO_VCORE_VECTOR_COLUMNS = os.environ.get("AZURE_COSMOSDB_MONGO_VCORE_VECTOR_COLUMNS")
-
-
-SHOULD_STREAM = True if AZURE_OPENAI_STREAM.lower() == "true" else False
+SHOULD_STREAM = False
+MAX_RETRIES = 3
 
 # Chat History CosmosDB Integration Settings
 AZURE_COSMOSDB_DATABASE = os.environ.get("AZURE_COSMOSDB_DATABASE")
 AZURE_COSMOSDB_ACCOUNT = os.environ.get("AZURE_COSMOSDB_ACCOUNT")
 AZURE_COSMOSDB_CONVERSATIONS_CONTAINER = os.environ.get("AZURE_COSMOSDB_CONVERSATIONS_CONTAINER")
 AZURE_COSMOSDB_ACCOUNT_KEY = os.environ.get("AZURE_COSMOSDB_ACCOUNT_KEY")
-
-# Elasticsearch Integration Settings
-ELASTICSEARCH_ENDPOINT = os.environ.get("ELASTICSEARCH_ENDPOINT")
-ELASTICSEARCH_ENCODED_API_KEY = os.environ.get("ELASTICSEARCH_ENCODED_API_KEY")
-ELASTICSEARCH_INDEX = os.environ.get("ELASTICSEARCH_INDEX")
-ELASTICSEARCH_QUERY_TYPE = os.environ.get("ELASTICSEARCH_QUERY_TYPE", "simple")
-ELASTICSEARCH_TOP_K = os.environ.get("ELASTICSEARCH_TOP_K", SEARCH_TOP_K)
-ELASTICSEARCH_ENABLE_IN_DOMAIN = os.environ.get("ELASTICSEARCH_ENABLE_IN_DOMAIN", SEARCH_ENABLE_IN_DOMAIN)
-ELASTICSEARCH_CONTENT_COLUMNS = os.environ.get("ELASTICSEARCH_CONTENT_COLUMNS")
-ELASTICSEARCH_FILENAME_COLUMN = os.environ.get("ELASTICSEARCH_FILENAME_COLUMN")
-ELASTICSEARCH_TITLE_COLUMN = os.environ.get("ELASTICSEARCH_TITLE_COLUMN")
-ELASTICSEARCH_URL_COLUMN = os.environ.get("ELASTICSEARCH_URL_COLUMN")
-ELASTICSEARCH_VECTOR_COLUMNS = os.environ.get("ELASTICSEARCH_VECTOR_COLUMNS")
-ELASTICSEARCH_STRICTNESS = os.environ.get("ELASTICSEARCH_STRICTNESS", SEARCH_STRICTNESS)
-ELASTICSEARCH_EMBEDDING_MODEL_ID = os.environ.get("ELASTICSEARCH_EMBEDDING_MODEL_ID")
 
 # Initialize a CosmosDB client with AAD auth and containers for Chat History
 cosmos_conversation_client = None
@@ -136,23 +101,14 @@ if AZURE_COSMOSDB_DATABASE and AZURE_COSMOSDB_ACCOUNT and AZURE_COSMOSDB_CONVERS
 
 
 def is_chat_model():
-    if 'gpt-4' in AZURE_OPENAI_MODEL_NAME.lower() or AZURE_OPENAI_MODEL_NAME.lower() in ['gpt-35-turbo-4k', 'gpt-35-turbo-16k']:
+    if 'gpt-4' in AZURE_OPENAI_MODEL_NAME.lower():
         return True
     return False
 
 def should_use_data():
     if AZURE_SEARCH_SERVICE and AZURE_SEARCH_INDEX and AZURE_SEARCH_KEY:
-        if DEBUG_LOGGING:
-            logging.debug("Using Azure Cognitive Search")
         return True
-    
-    if AZURE_COSMOSDB_MONGO_VCORE_DATABASE and AZURE_COSMOSDB_MONGO_VCORE_CONTAINER and AZURE_COSMOSDB_MONGO_VCORE_INDEX and AZURE_COSMOSDB_MONGO_VCORE_CONNECTION_STRING:
-        if DEBUG_LOGGING:
-            logging.debug("Using Azure CosmosDB Mongo vcore")
-        return True
-    
     return False
-
 
 def format_as_ndjson(obj: dict) -> str:
     return json.dumps(obj, ensure_ascii=False) + "\n"
@@ -211,50 +167,7 @@ def prepare_body_headers_with_data(request):
         "dataSources": []
     }
 
-    if DATASOURCE_TYPE == "AzureCognitiveSearch":
-        # Set query type
-        query_type = "simple"
-        if AZURE_SEARCH_QUERY_TYPE:
-            query_type = AZURE_SEARCH_QUERY_TYPE
-        elif AZURE_SEARCH_USE_SEMANTIC_SEARCH.lower() == "true" and AZURE_SEARCH_SEMANTIC_SEARCH_CONFIG:
-            query_type = "semantic"
-
-        # Set filter
-        filter = None
-        userToken = None
-        if AZURE_SEARCH_PERMITTED_GROUPS_COLUMN:
-            userToken = request.headers.get('X-MS-TOKEN-AAD-ACCESS-TOKEN', "")
-            if DEBUG_LOGGING:
-                logging.debug(f"USER TOKEN is {'present' if userToken else 'not present'}")
-
-            filter = generateFilterString(userToken)
-            if DEBUG_LOGGING:
-                logging.debug(f"FILTER: {filter}")
-
-        body["dataSources"].append(
-            {
-                "type": "AzureCognitiveSearch",
-                "parameters": {
-                    "endpoint": f"https://{AZURE_SEARCH_SERVICE}.search.windows.net",
-                    "key": AZURE_SEARCH_KEY,
-                    "indexName": AZURE_SEARCH_INDEX,
-                    "fieldsMapping": {
-                        "contentFields": AZURE_SEARCH_CONTENT_COLUMNS.split("|") if AZURE_SEARCH_CONTENT_COLUMNS else [],
-                        "titleField": AZURE_SEARCH_TITLE_COLUMN if AZURE_SEARCH_TITLE_COLUMN else None,
-                        "urlField": AZURE_SEARCH_URL_COLUMN if AZURE_SEARCH_URL_COLUMN else None,
-                        "filepathField": AZURE_SEARCH_FILENAME_COLUMN if AZURE_SEARCH_FILENAME_COLUMN else None,
-                        "vectorFields": AZURE_SEARCH_VECTOR_COLUMNS.split("|") if AZURE_SEARCH_VECTOR_COLUMNS else []
-                    },
-                    "inScope": True if AZURE_SEARCH_ENABLE_IN_DOMAIN.lower() == "true" else False,
-                    "topNDocuments": AZURE_SEARCH_TOP_K,
-                    "queryType": query_type,
-                    "semanticConfiguration": AZURE_SEARCH_SEMANTIC_SEARCH_CONFIG if AZURE_SEARCH_SEMANTIC_SEARCH_CONFIG else "",
-                    "roleInformation": AZURE_OPENAI_SYSTEM_MESSAGE,
-                    "filter": filter,
-                    "strictness": int(AZURE_SEARCH_STRICTNESS)
-                }
-            })
-    elif DATASOURCE_TYPE == "AzureCosmosDB":
+    if DATASOURCE_TYPE == "AzureCosmosDB":
         # Set query type
         query_type = "vector"
 
@@ -279,43 +192,6 @@ def prepare_body_headers_with_data(request):
                     "queryType": query_type,
                     "roleInformation": AZURE_OPENAI_SYSTEM_MESSAGE
                 }
-            }
-        )
-
-    elif DATASOURCE_TYPE == "Elasticsearch":
-        body["dataSources"].append(
-            {
-                "messages": request_messages,
-                "temperature": float(AZURE_OPENAI_TEMPERATURE),
-                "max_tokens": int(AZURE_OPENAI_MAX_TOKENS),
-                "top_p": float(AZURE_OPENAI_TOP_P),
-                "stop": AZURE_OPENAI_STOP_SEQUENCE.split("|") if AZURE_OPENAI_STOP_SEQUENCE else None,
-                "stream": SHOULD_STREAM,
-                "dataSources": [
-                    {
-                        "type": "AzureCognitiveSearch",
-                        "parameters": {
-                            "endpoint": ELASTICSEARCH_ENDPOINT,
-                            "encodedApiKey": ELASTICSEARCH_ENCODED_API_KEY,
-                            "indexName": ELASTICSEARCH_INDEX,
-                            "fieldsMapping": {
-                                "contentFields": ELASTICSEARCH_CONTENT_COLUMNS.split("|") if ELASTICSEARCH_CONTENT_COLUMNS else [],
-                                "titleField": ELASTICSEARCH_TITLE_COLUMN if ELASTICSEARCH_TITLE_COLUMN else None,
-                                "urlField": ELASTICSEARCH_URL_COLUMN if ELASTICSEARCH_URL_COLUMN else None,
-                                "filepathField": ELASTICSEARCH_FILENAME_COLUMN if ELASTICSEARCH_FILENAME_COLUMN else None,
-                                "vectorFields": ELASTICSEARCH_VECTOR_COLUMNS.split("|") if ELASTICSEARCH_VECTOR_COLUMNS else []
-                            },
-                            "inScope": True if ELASTICSEARCH_ENABLE_IN_DOMAIN.lower() == "true" else False,
-                            "topNDocuments": int(ELASTICSEARCH_TOP_K),
-                            "queryType": ELASTICSEARCH_QUERY_TYPE,
-                            "roleInformation": AZURE_OPENAI_SYSTEM_MESSAGE,
-                            "embeddingEndpoint": AZURE_OPENAI_EMBEDDING_ENDPOINT,
-                            "embeddingKey": AZURE_OPENAI_EMBEDDING_KEY,
-                            "embeddingModelId": ELASTICSEARCH_EMBEDDING_MODEL_ID,
-                            "strictness": int(ELASTICSEARCH_STRICTNESS)
-                        }
-                    }
-                ]
             }
         )
     else:
@@ -477,7 +353,7 @@ def formatApiResponseStreaming(rawResponse):
 
     return response
 
-def conversation_with_data(request_body):
+def conversation_with_data(request_body, model, api_version):
     body, headers = prepare_body_headers_with_data(request)
     base_url = AZURE_OPENAI_ENDPOINT if AZURE_OPENAI_ENDPOINT else f"https://{AZURE_OPENAI_RESOURCE}.openai.azure.com/"
     endpoint = f"{base_url}openai/deployments/{AZURE_OPENAI_MODEL}/extensions/chat/completions?api-version={AZURE_OPENAI_PREVIEW_API_VERSION}"
@@ -500,9 +376,12 @@ def conversation_with_data(request_body):
 
 def stream_without_data(response, history_metadata={}):
     responseText = ""
+    
     for line in response:
-        if line["choices"]:
-            deltaText = line["choices"][0]["delta"].get('content')
+        # if line["choices"]:
+        if line.choices[0].delta.content is not None:
+            # deltaText = line["choices"][0]["delta"].get('content')
+            deltaText = line.choices[0].delta.content, end=""
         else:
             deltaText = ""
         if deltaText and deltaText != "[DONE]":
@@ -524,7 +403,7 @@ def stream_without_data(response, history_metadata={}):
         yield format_as_ndjson(response_obj)
 
 
-def conversation_without_data(request_body):
+def conversation_without_data(request_body, model, api_version):
     openai.api_type = "azure"
     openai.api_base = AZURE_OPENAI_ENDPOINT if AZURE_OPENAI_ENDPOINT else f"https://{AZURE_OPENAI_RESOURCE}.openai.azure.com/"
     openai.api_version = "2023-08-01-preview"
@@ -545,21 +424,27 @@ def conversation_without_data(request_body):
                 "content": message["content"]
             })
 
-    response = openai.ChatCompletion.create(
-        engine=AZURE_OPENAI_MODEL,
+    client = openai.AzureOpenAI(
+        api_key=AZURE_OPENAI_KEY,
+        azure_endpoint=f"https://{AZURE_OPENAI_RESOURCE}.openai.azure.com",
+        api_version=api_version)
+
+    response = client.chat.completions.create(
+        model=model,
         messages = messages,
         temperature=float(AZURE_OPENAI_TEMPERATURE),
         max_tokens=int(AZURE_OPENAI_MAX_TOKENS),
         top_p=float(AZURE_OPENAI_TOP_P),
         stop=AZURE_OPENAI_STOP_SEQUENCE.split("|") if AZURE_OPENAI_STOP_SEQUENCE else None,
-        stream=SHOULD_STREAM
+        stream=SHOULD_STREAM,
+        timeout=60
     )
 
     history_metadata = request_body.get("history_metadata", {})
 
     if not SHOULD_STREAM:
         response_obj = {
-            "id": response,
+            "id": response.id,
             "model": response.model,
             "created": response.created,
             "object": response.object,
@@ -583,21 +468,105 @@ def conversation():
     return conversation_internal(request_body)
 
 def conversation_internal(request_body):
+    # Retrieve the user identity from the request headers
+    # user_identity = request_body.headers.get('x-auth-request-email')
+    user_identity = '000000-000000'
+
+    # Retrieve the IP address from the request headers
+    #  ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+
+    # Retrieve the content from the last message from the request body
+    message = request.json["messages"][-1]["content"]
+
+    model = "gpt-4-32k"
+    api_version = "2023-08-01-preview"
+
+    # Log the user identity, device information, and message
+    # logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, IP address: {ip_address}, message: {message}')
+    logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, message: {message}')
+
     try:
         use_data = should_use_data()
         if use_data:
-            return conversation_with_data(request_body)
+            return conversation_with_data(request_body, model, api_version)
         else:
-            return conversation_without_data(request_body)
+            return conversation_without_data(request_body, model, api_version)
+    except (TimeoutError, openai.APITimeoutError) as e:
+        logging.error("OpenAI timed out!")
+        return jsonify({"error": _parse_openai_error(e)}), 408
+    except openai.BadRequestError as e:
+        logging.error(e)
+        return jsonify({"error": _parse_openai_error(e)}), 400
     except Exception as e:
         logging.exception("Exception in /conversation")
         return jsonify({"error": str(e)}), 500
 
+@app.route("/dalle", methods=["GET", "POST"])
+# @jwt_required
+def dalle(jwt_claims: dict):
+    # Retrieve the user identity from the request headers
+    user_identity = request.headers.get('x-auth-request-email')
+
+    # Retrieve the IP address from the request headers
+    #  ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+
+    # Retrieve the content from the last message from the request body
+    message = request.json["messages"][-1]["content"]
+
+    model = "dall-e-3"
+    api_version = "2023-12-01-preview"
+
+    # Log the user identity, device information, and message
+    # logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, IP address: {ip_address}, message: {message}')
+    logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, message: {message}')
+
+    client = openai.AzureOpenAI(
+        api_key=AZURE_OPENAI_KEY,
+        azure_endpoint=f"https://{AZURE_OPENAI_RESOURCE}.openai.azure.com",
+        api_version=api_version)
+
+    for attempt in range(1, MAX_RETRIES):
+        try:
+            generation_response = client.images.generate(
+                model=model, # the name of your DALL-E 3 deployment
+                prompt=message,
+                timeout=60
+            )
+
+            logging.info(f"prompt: {message}, revised_prompt: {generation_response.data[0].revised_prompt}")
+
+            image_url = generation_response.data[0].url
+            response_data = {"image_url": image_url}
+            return Response(json.dumps(response_data).replace("\n", "\\n"), status=200)
+        except openai.RateLimitError as e:
+            logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} - OpenAI request rate limited. Retrying...")
+            time.sleep(3)
+            continue
+        except (TimeoutError, openai.APITimeoutError) as e:
+            logging.error("OpenAI timed out!")
+            return jsonify({"error": _parse_openai_error(e)}), 408
+        except openai.BadRequestError as e:
+            logging.error(e)
+            return jsonify({"error": _parse_openai_error(e)}), 400
+        except Exception as e:
+            logging.exception(f"Exception in /dalle: {_parse_openai_error(e)}")
+            return jsonify({"error": _parse_openai_error(e)}), 500
+        
+    # If all attempts fail
+    logging.error(f"All {MAX_RETRIES} attempts failed. OpenAI timed out or rate limit exceeded!")
+    return jsonify({"error": 
+        """
+            Thank you for using the enhanced features of IDSGPT 4.0. We are currently experiencing high demand 
+            and cannot respond to your request. We appreciate your patience as you use this experimental
+            service. Please resubmit your request at a later time.
+        """}), 429
+
 ## Conversation History API ## 
 @app.route("/history/generate", methods=["POST"])
+# @jwt_required
 def add_conversation():
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user['user_principal_id']
+    # user_id = request_body.headers.get('x-auth-request-email')
+    user_id = '000000-000000'
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -641,8 +610,8 @@ def add_conversation():
 
 @app.route("/history/update", methods=["POST"])
 def update_conversation():
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user['user_principal_id']
+    # user_id = request_body.headers.get('x-auth-request-email')
+    user_id = '000000-000000'
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -687,8 +656,8 @@ def update_conversation():
 @app.route("/history/delete", methods=["DELETE"])
 def delete_conversation():
     ## get the user id from the request headers
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user['user_principal_id']
+    # user_id = request_body.headers.get('x-auth-request-email')
+    user_id = '000000-000000'
     
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -710,8 +679,8 @@ def delete_conversation():
 @app.route("/history/list", methods=["GET"])
 def list_conversations():
     offset = request.args.get("offset", 0)
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user['user_principal_id']
+    # user_id = request_body.headers.get('x-auth-request-email')
+    user_id = '000000-000000'
 
     ## get the conversations from cosmos
     conversations = cosmos_conversation_client.get_conversations(user_id, offset=offset, limit=25)
@@ -724,8 +693,8 @@ def list_conversations():
 
 @app.route("/history/read", methods=["POST"])
 def get_conversation():
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user['user_principal_id']
+    # user_id = request_body.headers.get('x-auth-request-email')
+    user_id = '000000-000000'
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -749,8 +718,8 @@ def get_conversation():
 
 @app.route("/history/rename", methods=["POST"])
 def rename_conversation():
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user['user_principal_id']
+    # user_id = request_body.headers.get('x-auth-request-email')
+    user_id = '000000-000000'
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -775,8 +744,8 @@ def rename_conversation():
 @app.route("/history/delete_all", methods=["DELETE"])
 def delete_all_conversations():
     ## get the user id from the request headers
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user['user_principal_id']
+    # user_id = request_body.headers.get('x-auth-request-email')
+    user_id = '000000-000000'
 
     # get conversations for user
     try:
@@ -802,9 +771,9 @@ def delete_all_conversations():
 @app.route("/history/clear", methods=["POST"])
 def clear_messages():
     ## get the user id from the request headers
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user['user_principal_id']
-    
+    # user_id = request_body.headers.get('x-auth-request-email')
+    user_id = '000000-000000'
+
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
     try: 
