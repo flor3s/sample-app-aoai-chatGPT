@@ -69,7 +69,7 @@ AZURE_OPENAI_EMBEDDING_ENDPOINT = os.environ.get("AZURE_OPENAI_EMBEDDING_ENDPOIN
 AZURE_OPENAI_EMBEDDING_KEY = os.environ.get("AZURE_OPENAI_EMBEDDING_KEY")
 AZURE_OPENAI_EMBEDDING_NAME = os.environ.get("AZURE_OPENAI_EMBEDDING_NAME", "")
 
-SHOULD_STREAM = False
+SHOULD_STREAM = True if AZURE_OPENAI_STREAM.lower() == "true" else False
 MAX_RETRIES = 3
 
 # Chat History CosmosDB Integration Settings
@@ -377,30 +377,31 @@ def conversation_with_data(request_body, model, api_version):
 def stream_without_data(response, history_metadata={}):
     responseText = ""
     
-    for line in response:
-        # if line["choices"]:
-        if line.choices[0].delta.content is not None:
-            # deltaText = line["choices"][0]["delta"].get('content')
-            deltaText = line.choices[0].delta.content, end=""
-        else:
-            deltaText = ""
-        if deltaText and deltaText != "[DONE]":
-            responseText = deltaText
+    for index, line in enumerate(response):
+        if index != 0:
+            # if line["choices"]:
+            if line.choices[0].delta.content is not None:
+                # deltaText = line["choices"][0]["delta"].get('content')
+                deltaText = line.choices[0].delta.content
+            else:
+                deltaText = ""
+            if deltaText and deltaText != "[DONE]":
+                responseText = deltaText
 
-        response_obj = {
-            "id": line["id"],
-            "model": line["model"],
-            "created": line["created"],
-            "object": line["object"],
-            "choices": [{
-                "messages": [{
-                    "role": "assistant",
-                    "content": responseText
-                }]
-            }],
-            "history_metadata": history_metadata
-        }
-        yield format_as_ndjson(response_obj)
+            response_obj = {
+                "id": line.id,
+                "model": line.model,
+                "created": line.created,
+                "object": line.object,
+                "choices": [{
+                    "messages": [{
+                        "role": "assistant",
+                        "content": deltaText
+                    }]
+                }],
+                "history_metadata": history_metadata
+            }
+            yield format_as_ndjson(response_obj)
 
 
 def conversation_without_data(request_body, model, api_version):
