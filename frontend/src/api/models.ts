@@ -21,11 +21,11 @@ export type ToolMessageContent = {
 }
 
 export type ChatMessage = {
-    id: string;
+    id?: string;
     role: string;
     content: string;
     end_turn?: boolean;
-    date: string;
+    date?: string;
 };
 
 export type Conversation = {

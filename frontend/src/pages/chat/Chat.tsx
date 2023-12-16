@@ -25,13 +25,15 @@ import {
     historyClear,
     ChatHistoryLoadingState,
     CosmosDBStatus,
-    ErrorMessage
+    ErrorMessage,
+    dalleApi
 } from "../../api";
 import { Answer } from "../../components/Answer";
 import { QuestionInput } from "../../components/QuestionInput";
 import { ChatHistoryPanel } from "../../components/ChatHistory/ChatHistoryPanel";
 import { AppStateContext } from "../../state/AppProvider";
 import { useBoolean } from "@fluentui/react-hooks";
+import { ModelType } from "../../api/models";
 
 const enum messageStatus {
     NotRunning = "Not Running",
@@ -40,7 +42,9 @@ const enum messageStatus {
 }
 
 const Chat = () => {
+    const lastQuestionRef = useRef<string>("");
     const appStateContext = useContext(AppStateContext)
+    const modelRef = useRef<ModelType>(ModelType.GPT_4);
     const chatMessageStreamEnd = useRef<HTMLDivElement | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [showLoadingMessage, setShowLoadingMessage] = useState<boolean>(false);
@@ -48,10 +52,12 @@ const Chat = () => {
     const [isCitationPanelOpen, setIsCitationPanelOpen] = useState<boolean>(false);
     const abortFuncs = useRef([] as AbortController[]);
     const [showAuthMessage, setShowAuthMessage] = useState<boolean>(true);
+    const [answers, setAnswers] = useState<ChatMessage[]>([]);
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [processMessages, setProcessMessages] = useState<messageStatus>(messageStatus.NotRunning);
     const [clearingChat, setClearingChat] = useState<boolean>(false);
     const [hideErrorDialog, { toggle: toggleErrorDialog }] = useBoolean(true);
+    const [error, setError] = useState<unknown>();
     const [errorMsg, setErrorMsg] = useState<ErrorMessage | null>()
 
     const errorDialogContentProps = {
@@ -69,6 +75,10 @@ const Chat = () => {
     }
 
     const [ASSISTANT, TOOL, ERROR] = ["assistant", "tool", "error"]
+
+    useEffect(() => {
+        console.log(messages)
+    }, [messages])
 
     useEffect(() => {
         if(appStateContext?.state.isCosmosDBAvailable?.status === CosmosDBStatus.NotWorking && appStateContext.state.chatHistoryLoadingState === ChatHistoryLoadingState.Fail && hideErrorDialog){
@@ -126,56 +136,37 @@ const Chat = () => {
         }
     }
 
-    const makeApiRequestWithoutCosmosDB = async (question: string, conversationId?: string) => {
+    const makeApiRequestWithoutCosmosDB = async (question: string) => {
+        lastQuestionRef.current = question;
+
         setIsLoading(true);
+        error && setError(undefined);
         setShowLoadingMessage(true);
         const abortController = new AbortController();
         abortFuncs.current.unshift(abortController);
 
         const userMessage: ChatMessage = {
-            id: uuid(),
             role: "user",
             content: question,
-            date: new Date().toISOString(),
+            id: uuid(),
         };
 
-        let conversation: Conversation | null | undefined;
-        if(!conversationId){
-            conversation = {
-                id: conversationId ?? uuid(),
-                title: question,
-                messages: [userMessage],
-                date: new Date().toISOString(),
-            }
-        }else{
-            conversation = appStateContext?.state?.currentChat
-            if(!conversation){
-                console.error("Conversation not found.");
-                setIsLoading(false);
-                setShowLoadingMessage(false);
-                abortFuncs.current = abortFuncs.current.filter(a => a !== abortController);
-                return;
-            }else{
-                conversation.messages.push(userMessage);
-            }
-        }
-
-        appStateContext?.dispatch({ type: 'UPDATE_CURRENT_CHAT', payload: conversation });
-        setMessages(conversation.messages)
-        
         const request: ConversationRequest = {
-            messages: [...conversation.messages.filter((answer) => answer.role !== ERROR)]
+            //messages: [...answers, userMessage]
+            messages: messages.slice(-6).concat(userMessage)
+            //messages: [...context, userMessage]
         };
+        setMessages(request.messages)
 
         let result = {} as ChatResponse;
+        let response;
         try {
-            const response = await conversationApi(request, abortController.signal);
+            response = await dalleApi(request, abortController.signal);
             if (response?.body) {
+                
                 const reader = response.body.getReader();
                 let runningText = "";
-
                 while (true) {
-                    setProcessMessages(messageStatus.Processing)
                     const {done, value} = await reader.read();
                     if (done) break;
 
@@ -185,54 +176,71 @@ const Chat = () => {
                         try {
                             runningText += obj;
                             result = JSON.parse(runningText);
-                            result.choices[0].messages.forEach((obj) => {
-                                obj.id = uuid();
-                                obj.date = new Date().toISOString();
-                            })
                             setShowLoadingMessage(false);
-                            result.choices[0].messages.forEach((resultObj) => {
-                                processResultMessage(resultObj, userMessage, conversationId);
-                            })
+                            if (result?.choices) {
+                                setMessages([...messages, userMessage, ...result.choices[0].messages]);
+                            }
                             runningText = "";
                         }
                         catch { }
                     });
                 }
-                conversation.messages.push(toolMessage, assistantMessage)
-                appStateContext?.dispatch({ type: 'UPDATE_CURRENT_CHAT', payload: conversation });
-                setMessages([...messages, toolMessage, assistantMessage]);
+                if (result?.choices) {
+                    setMessages([...messages, userMessage, ...result.choices[0].messages]);
+                }
+                else if (result?.image_url) {
+                    const imageMessage: ChatMessage = {
+                        role: 'image',
+                        content: result.image_url,
+                        id: uuid()
+                    };
+                    setMessages([...messages, userMessage, imageMessage]);
+                }
+                else if (result?.error) {
+                    const safetyPattern: RegExp = /safety system/;
+                    const errorMessage: ChatMessage = {
+                        role: 'assistant',
+                        content: safetyPattern.test(result.error) ? 
+                            "The task failed as a result of our safety system. This is an experimental feature of IDSGPT " + 
+                            "and the system may have incorrectly rejected your request. Please try again."
+                            :
+                            "Sorry, answer generation has failed. " + result.error
+                    }
+                    setMessages([...messages, userMessage, errorMessage]);
+                }
             }
             
         } catch ( e )  {
             if (!abortController.signal.aborted) {
-                let errorMessage = "An error occurred. Please try again. If the problem persists, please contact the site administrator.";
-                if (result.error?.message) {
-                    errorMessage = result.error.message;
+                console.error(e);
+                console.error(result);
+                if(response && response.status === 408){
+                    setError("Timed out, Please try again");
                 }
-                else if (typeof result.error === "string") {
-                    errorMessage = result.error;
+                else if(response && response.status === 400){
+                    const lengthPattern: RegExp = /Please reduce the length/;
+                    let message = result.error ? result.error : ""
+                    if (lengthPattern.test(message)) {
+                        setError("Please reduce the length of the messages.");
+                    }
+                    else{
+                    alert("An error occurred. Please try again. If the problem persists, please contact the site administrator.")
+                    }
                 }
-                let errorChatMsg: ChatMessage = {
-                    id: uuid(),
-                    role: ERROR,
-                    content: errorMessage,
-                    date: new Date().toISOString()
+                else{
+                alert("An error occurred. Please try again. If the problem persists, please contact the site administrator.")
                 }
-                conversation.messages.push(errorChatMsg);
-                appStateContext?.dispatch({ type: 'UPDATE_CURRENT_CHAT', payload: conversation });
-                setMessages([...messages, errorChatMsg]);
-            } else {
-                setMessages([...messages, userMessage])
             }
+            setMessages([...messages, userMessage]);
         } finally {
             setIsLoading(false);
             setShowLoadingMessage(false);
             abortFuncs.current = abortFuncs.current.filter(a => a !== abortController);
-            setProcessMessages(messageStatus.Done)
         }
 
         return abortController.abort();
     };
+
 
     const makeApiRequestWithCosmosDB = async (question: string, conversationId?: string) => {
         setIsLoading(true);
@@ -611,8 +619,15 @@ const Chat = () => {
                                                     <span>Error</span>
                                                 </Stack>
                                                 <span className={styles.chatMessageErrorContent}>{answer.content}</span>
-                                            </div> : null
-                                        )}
+                                            </div>
+                                        : (
+                                            answer.role === "image" ? (
+                                                <div className={styles.chatMessageImage}>
+                                                    <img src={answer.content} alt="Image" />
+                                                </div>
+                                            ) : null
+                                        )
+                                    )}
                                     </>
                                 ))}
                                 {showLoadingMessage && (
@@ -698,8 +713,12 @@ const Chat = () => {
                                 clearOnSend
                                 placeholder="Type a new question..."
                                 disabled={isLoading}
-                                onSend={(question, id) => {
-                                    appStateContext?.state.isCosmosDBAvailable?.cosmosDB ? makeApiRequestWithCosmosDB(question, id) : makeApiRequestWithoutCosmosDB(question, id)
+                                onSend={(question, id?, model?: ModelType) => {
+                                    if (appStateContext?.state.isCosmosDBAvailable?.cosmosDB && model == "GPT 4") {
+                                        makeApiRequestWithCosmosDB(question, id)
+                                    } else {
+                                        makeApiRequestWithoutCosmosDB(question)
+                                    }
                                 }}
                                 conversationId={appStateContext?.state.currentChat?.id ? appStateContext?.state.currentChat?.id : undefined}
                             />

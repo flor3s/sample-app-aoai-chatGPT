@@ -504,7 +504,7 @@ def conversation_internal(request_body):
 
 @app.route("/dalle", methods=["GET", "POST"])
 # @jwt_required
-def dalle(jwt_claims: dict):
+def dalle():
     # Retrieve the user identity from the request headers
     user_identity = request.headers.get('x-auth-request-email')
 
