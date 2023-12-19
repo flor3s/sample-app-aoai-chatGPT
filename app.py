@@ -594,7 +594,7 @@ def conversation_internal(request_body):
     user_identity = '000000-000000'
 
     # Retrieve the IP address from the request headers
-    #  ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+    ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
 
     # Retrieve the content from the last message from the request body
     message = request.json["messages"][-1]["content"]
@@ -603,8 +603,7 @@ def conversation_internal(request_body):
     api_version = "2023-08-01-preview"
 
     # Log the user identity, device information, and message
-    # logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, IP address: {ip_address}, message: {message}')
-    logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, message: {message}')
+    logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, IP address: {ip_address}, message: {message}')
 
     try:
         use_data = should_use_data()
@@ -629,7 +628,7 @@ def dalle():
     user_identity = request.headers.get('x-auth-request-email')
 
     # Retrieve the IP address from the request headers
-    #  ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+    ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
 
     # Retrieve the content from the last message from the request body
     message = request.json["messages"][-1]["content"]
@@ -638,8 +637,7 @@ def dalle():
     api_version = "2023-12-01-preview"
 
     # Log the user identity, device information, and message
-    # logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, IP address: {ip_address}, message: {message}')
-    logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, message: {message}')
+    logging.info(f'model: {model}, api version: {api_version}, user identity: {user_identity}, IP address: {ip_address}, message: {message}')
 
     client = openai.AzureOpenAI(
         api_key=AZURE_OPENAI_KEY,
@@ -684,10 +682,9 @@ def dalle():
 
 ## Conversation History API ## 
 @app.route("/history/generate", methods=["POST"])
-# @jwt_required
+@jwt_required
 def add_conversation():
-    # user_id = request_body.headers.get('x-auth-request-email')
-    user_id = '000000-000000'
+    user_id = request_body.headers.get('x-auth-request-email')
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -730,9 +727,9 @@ def add_conversation():
 
 
 @app.route("/history/update", methods=["POST"])
+@jwt_required
 def update_conversation():
-    # user_id = request_body.headers.get('x-auth-request-email')
-    user_id = '000000-000000'
+    user_id = request_body.headers.get('x-auth-request-email')
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -775,10 +772,10 @@ def update_conversation():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/history/delete", methods=["DELETE"])
+@jwt_required
 def delete_conversation():
     ## get the user id from the request headers
-    # user_id = request_body.headers.get('x-auth-request-email')
-    user_id = '000000-000000'
+    user_id = request_body.headers.get('x-auth-request-email')
     
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -798,10 +795,10 @@ def delete_conversation():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/history/list", methods=["GET"])
+@jwt_required
 def list_conversations():
     offset = request.args.get("offset", 0)
-    # user_id = request_body.headers.get('x-auth-request-email')
-    user_id = '000000-000000'
+    user_id = request_body.headers.get('x-auth-request-email')
 
     ## get the conversations from cosmos
     conversations = cosmos_conversation_client.get_conversations(user_id, offset=offset, limit=25)
@@ -813,9 +810,9 @@ def list_conversations():
     return jsonify(conversations), 200
 
 @app.route("/history/read", methods=["POST"])
+@jwt_required
 def get_conversation():
-    # user_id = request_body.headers.get('x-auth-request-email')
-    user_id = '000000-000000'
+    user_id = request_body.headers.get('x-auth-request-email')
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -838,9 +835,9 @@ def get_conversation():
     return jsonify({"conversation_id": conversation_id, "messages": messages}), 200
 
 @app.route("/history/rename", methods=["POST"])
+@jwt_required
 def rename_conversation():
-    # user_id = request_body.headers.get('x-auth-request-email')
-    user_id = '000000-000000'
+    user_id = request_body.headers.get('x-auth-request-email')
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
@@ -863,10 +860,10 @@ def rename_conversation():
     return jsonify(updated_conversation), 200
 
 @app.route("/history/delete_all", methods=["DELETE"])
+@jwt_required
 def delete_all_conversations():
     ## get the user id from the request headers
-    # user_id = request_body.headers.get('x-auth-request-email')
-    user_id = '000000-000000'
+    user_id = request_body.headers.get('x-auth-request-email')
 
     # get conversations for user
     try:
@@ -889,11 +886,11 @@ def delete_all_conversations():
         return jsonify({"error": str(e)}), 500
     
 
-@app.route("/history/clear", methods=["POST"])
+@app.route("/history/clear", methods=["POST"])'
+@jwt_required
 def clear_messages():
     ## get the user id from the request headers
-    # user_id = request_body.headers.get('x-auth-request-email')
-    user_id = '000000-000000'
+    user_id = request_body.headers.get('x-auth-request-email')
 
     ## check request for conversation_id
     conversation_id = request.json.get("conversation_id", None)
