@@ -583,6 +583,7 @@ def conversation_without_data(request_body, model, api_version):
 
 
 @app.route("/conversation", methods=["GET", "POST"])
+@jwt_required
 def conversation():
     request_body = request.json
     return conversation_internal(request_body)
@@ -622,7 +623,7 @@ def conversation_internal(request_body):
         return jsonify({"error": str(e)}), 500
 
 @app.route("/dalle", methods=["GET", "POST"])
-# @jwt_required
+@jwt_required
 def dalle():
     # Retrieve the user identity from the request headers
     user_identity = request.headers.get('x-auth-request-email')

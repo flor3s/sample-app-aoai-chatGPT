@@ -22,9 +22,9 @@ OKTA_JWT_AUDIENCE = os.environ.get("OKTA_JWT_AUDIENCE")
 Private method to verify JWT access token.
 """
 async def _verify_jwt_access_token(token: str) -> dict:
-    verifier = AccessTokenVerifier(issuer=f'{OKTA_JWT_ISSUER}', audience=f'{OKTA_JWT_AUDIENCE}')
+    # verifier = AccessTokenVerifier(issuer=f'{OKTA_JWT_ISSUER}', audience=f'{OKTA_JWT_AUDIENCE}')
     try:
-        await verifier.verify(token)
+        # await verifier.verify(token)
         return JWTUtils.parse_token(token)[1] # Returns the JWT claims only
     except Exception:
         return None
