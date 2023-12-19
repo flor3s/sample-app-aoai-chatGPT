@@ -62,7 +62,6 @@
 
 .chatIcon {
     height: 62px;
-    width: 62px;
 }
 
 .chatMessageStream {
@@ -339,7 +338,6 @@ a {
     width: calc(100% - 100px);
     max-width: 1028px;
 }
-
 
 .chatMessageImage img {
     max-width: 30%;

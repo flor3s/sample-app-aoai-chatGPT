@@ -9,7 +9,7 @@ import uuid from 'react-uuid';
 import { isEmpty } from "lodash-es";
 
 import styles from "./Chat.module.css";
-import Azure from "../../assets/Azure.svg";
+import Logo from "../../assets/logo-center.png";
 
 import {
     ChatMessage,
@@ -47,6 +47,7 @@ const Chat = () => {
     const modelRef = useRef<ModelType>(ModelType.GPT_4);
     const chatMessageStreamEnd = useRef<HTMLDivElement | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [isFetchingHistory, setIsFetchingHistory] = useState<boolean>(false);
     const [showLoadingMessage, setShowLoadingMessage] = useState<boolean>(false);
     const [activeCitation, setActiveCitation] = useState<Citation>();
     const [isCitationPanelOpen, setIsCitationPanelOpen] = useState<boolean>(false);
@@ -99,7 +100,7 @@ const Chat = () => {
     }
 
     useEffect(() => {
-       setIsLoading(appStateContext?.state.chatHistoryLoadingState === ChatHistoryLoadingState.Loading)
+       setIsFetchingHistory(appStateContext?.state.chatHistoryLoadingState === ChatHistoryLoadingState.Loading)
     }, [appStateContext?.state.chatHistoryLoadingState])
 
     const getUserInfoList = async () => {
@@ -570,33 +571,21 @@ const Chat = () => {
 
     return (
         <div className={styles.container} role="main">
-            {showAuthMessage ? (
-                <Stack className={styles.chatEmptyState}>
-                    <ShieldLockRegular className={styles.chatIcon} style={{color: 'darkorange', height: "200px", width: "200px"}}/>
-                    <h1 className={styles.chatEmptyStateTitle}>Authentication Not Configured</h1>
-                    <h2 className={styles.chatEmptyStateSubtitle}>
-                        This app does not have authentication configured. Please add an identity provider by finding your app in the 
-                        <a href="https://portal.azure.com/" target="_blank"> Azure Portal </a>
-                        and following 
-                         <a href="https://learn.microsoft.com/en-us/azure/app-service/scenario-secure-app-authentication-app-service#3-configure-authentication-and-authorization" target="_blank"> these instructions</a>.
-                    </h2>
-                    <h2 className={styles.chatEmptyStateSubtitle} style={{fontSize: "20px"}}><strong>Authentication configuration takes a few minutes to apply. </strong></h2>
-                    <h2 className={styles.chatEmptyStateSubtitle} style={{fontSize: "20px"}}><strong>If you deployed in the last 10 minutes, please wait and reload the page after 10 minutes.</strong></h2>
-                </Stack>
-            ) : (
                 <Stack horizontal className={styles.chatRoot}>
                     <div className={styles.chatContainer}>
                         {!messages || messages.length < 1 ? (
                             <Stack className={styles.chatEmptyState}>
-                                <img
-                                    src={Azure}
-                                    className={styles.chatIcon}
-                                    aria-hidden="true"
-                                />
-                                <h1 className={styles.chatEmptyStateTitle}>Start chatting</h1>
-                                <h2 className={styles.chatEmptyStateSubtitle}>This chatbot is configured to answer your questions</h2>
-                            </Stack>
-                        ) : (
+                            <img
+                                src={Logo}
+                                className={styles.chatIcon}
+                                aria-hidden="true"
+                            />
+                            <h1 className={styles.chatEmptyStateTitle}>CBI Private ChatGPT</h1>
+                            <p className={styles.chatInput}><span>Please refer to the <a href="https://cbrands--c.vf.force.com/apex/CBI_ContentSearch?contentId=a1BG0000003XU2DMAW&type=POLICIES&category=IT&sortBy=lastModifiedDate&sortOrder=desc">Generative Artificial Intelligence Policy</a> for guidance on approved usage of Generative AI platforms and your responsibilities to ensure the protection of our intellectual property. Generative AI is an exciting and fast-moving technology that will enhance the way we work but does come with risk, the policy is intended to provide guidance to help minimize those risks, while allowing us to take advantage of the emerging capabilities. To that end, please note that the <b>new text-to-image functionality utilizing DALL-E 3 is a preview</b>, and only offers a glimpse into its capabilities at this time.</span>
+                            <br /><br /><span>We encourage you to utilize the feedback button at the top of the page with any thoughts or suggestions as we continue to work on enhancing IDSGPT.</span>
+                            </p>
+                        </Stack>
+                    ) : (
                             <div className={styles.chatMessageStream} style={{ marginBottom: isLoading ? "40px" : "0px"}} role="log">
                                 {messages.map((answer, index) => (
                                     <>
@@ -648,6 +637,17 @@ const Chat = () => {
                         )}
 
                         <Stack horizontal className={styles.chatInput}>
+                            {isFetchingHistory && (
+                                    <Stack 
+                                        horizontal
+                                        className={styles.stopGeneratingContainer}
+                                        role="button"
+                                        aria-label="Loading History"
+                                        tabIndex={0}
+                                        >
+                                            <span className={styles.stopGeneratingText} aria-hidden="true">Loading History</span>
+                                    </Stack>
+                            )}
                             {isLoading && (
                                 <Stack 
                                     horizontal
@@ -662,7 +662,7 @@ const Chat = () => {
                                         <span className={styles.stopGeneratingText} aria-hidden="true">Stop generating</span>
                                 </Stack>
                             )}
-                            <Stack>
+\                            <Stack>
                                 {appStateContext?.state.isCosmosDBAvailable?.status !== CosmosDBStatus.NotConfigured && <CommandBarButton
                                     role="button"
                                     styles={{ 
@@ -745,7 +745,6 @@ const Chat = () => {
                 )}
                 {(appStateContext?.state.isChatHistoryOpen && appStateContext?.state.isCosmosDBAvailable?.status !== CosmosDBStatus.NotConfigured) && <ChatHistoryPanel/>}
                 </Stack>
-            )}
         </div>
     );
 };
