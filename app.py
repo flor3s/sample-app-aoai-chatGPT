@@ -16,6 +16,10 @@ from auth import jwt_required
 #set the log level to INFO.... this is necessary to capture the inputs in logs
 logging.basicConfig(level=logging.INFO)
 
+# Suppress cosmosdb info logging
+logger = logging.getLogger('azure')
+logger.setLevel(logging.ERROR)
+
 load_dotenv()
 
 app = Flask(__name__, static_folder="static")
@@ -61,13 +65,63 @@ AZURE_OPENAI_TEMPERATURE = os.environ.get("AZURE_OPENAI_TEMPERATURE", 0)
 AZURE_OPENAI_TOP_P = os.environ.get("AZURE_OPENAI_TOP_P", 1.0)
 AZURE_OPENAI_MAX_TOKENS = os.environ.get("AZURE_OPENAI_MAX_TOKENS", 1000)
 AZURE_OPENAI_STOP_SEQUENCE = os.environ.get("AZURE_OPENAI_STOP_SEQUENCE")
-AZURE_OPENAI_SYSTEM_MESSAGE = os.environ.get("AZURE_OPENAI_SYSTEM_MESSAGE", "You are an AI assistant that helps people find information.")
+AZURE_OPENAI_SYSTEM_MESSAGE = os.environ.get("AZURE_OPENAI_SYSTEM_MESSAGE",
+    """
+    You are an AI assistant that helps people find information. You can query the web using Bing Search. You should call
+    Bing Search when a question requires up to date information, when a user explicitly requests a search, or when a user
+    asks for references. Use this service sparingly, and provide links in the response when the service is utilized.
+    """                                             
+)
 AZURE_OPENAI_PREVIEW_API_VERSION = os.environ.get("AZURE_OPENAI_PREVIEW_API_VERSION", "2023-08-01-preview")
 AZURE_OPENAI_STREAM = os.environ.get("AZURE_OPENAI_STREAM", "true")
 AZURE_OPENAI_MODEL_NAME = os.environ.get("AZURE_OPENAI_MODEL_NAME", "gpt-35-turbo-16k") # Name of the model, e.g. 'gpt-35-turbo-16k' or 'gpt-4'
 AZURE_OPENAI_EMBEDDING_ENDPOINT = os.environ.get("AZURE_OPENAI_EMBEDDING_ENDPOINT")
 AZURE_OPENAI_EMBEDDING_KEY = os.environ.get("AZURE_OPENAI_EMBEDDING_KEY")
 AZURE_OPENAI_EMBEDDING_NAME = os.environ.get("AZURE_OPENAI_EMBEDDING_NAME", "")
+
+# Bing Integration
+BING_SEARCH_API_KEY = os.environ.get("BING_SEARCH_API_KEY")
+
+# Available Functions
+def search(query):
+    bing_search_url = "https://api.bing.microsoft.com/v7.0/search"
+    headers = {"Ocp-Apim-Subscription-Key": BING_SEARCH_API_KEY}
+    params = {"q": query, "textDecorations": False }
+    response = requests.get(bing_search_url, headers=headers, params=params)
+    response.raise_for_status()
+    search_results = response.json()
+
+    output = []
+
+    for result in search_results["webPages"]["value"]:
+        output.append({
+            "title": result["name"],
+            "link": result["url"],
+            "snippet": result["snippet"]
+        })
+
+    return json.dumps(output)
+
+FUNCTIONS = [  
+    {
+        "name": "search_bing",
+        "description": "Searches bing to get up to date information from the web",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query",
+                }
+            },
+            "required": ["query"],
+        },
+    }
+]
+
+AVAILABLE_FUNCTIONS = {
+    "search_bing": search
+}
 
 SHOULD_STREAM = True if AZURE_OPENAI_STREAM.lower() == "true" else False
 MAX_RETRIES = 3
@@ -374,35 +428,98 @@ def conversation_with_data(request_body, model, api_version):
     else:
         return Response(stream_with_data(body, headers, endpoint, history_metadata), mimetype='text/event-stream')
 
-def stream_without_data(response, history_metadata={}):
-    responseText = ""
-    
-    for index, line in enumerate(response):
-        if index != 0:
-            # if line["choices"]:
-            if line.choices[0].delta.content is not None:
-                # deltaText = line["choices"][0]["delta"].get('content')
-                deltaText = line.choices[0].delta.content
-            else:
-                deltaText = ""
-            if deltaText and deltaText != "[DONE]":
-                responseText = deltaText
+def run_function(messages, func_call, api_version, model):
+    function_name = func_call["name"]
+    arguments = func_call["arguments"]
 
+    # Verify that the function exists and call it.
+    if function_name not in AVAILABLE_FUNCTIONS:
+        logging.error("Function " + function_name + " does not exist")
+        return
+    
+    function_to_call = AVAILABLE_FUNCTIONS[function_name]  
+    function_response = function_to_call(arguments)
+    
+    # Add the function response to messages for consideration.
+    messages.append(
+        {
+            "role": "function",
+            "name": function_name,
+            "content": function_response,
+        }
+    ) 
+
+    # Make a new call to the API with the data from the function.
+    client = openai.AzureOpenAI(
+        api_key=AZURE_OPENAI_KEY,
+        azure_endpoint=f"https://{AZURE_OPENAI_RESOURCE}.openai.azure.com",
+        api_version=api_version)
+    
+    response = client.chat.completions.create(
+        model=model,
+        messages = messages,
+        timeout = 60,
+        temperature = 0,
+        stream=True
+    )
+
+    return response
+
+def stream_without_data(response, messages, api_version, model, history_metadata={}):
+    response_text = ""
+    function_call_detected = False
+    func_call = {"name": "", "arguments": ""}
+
+    for response_chunk in response:
+        # Retrieve the "choices" attribute from response_chunk and skip iteration if empty or not present.
+        if not (choices := getattr(response_chunk, "choices")): continue
+
+        deltas = response_chunk.choices[0].delta or None
+
+        # If the a function call has been requested, set the func_call values to be called later.
+        if getattr(deltas, "function_call", None) is not None:
+            function_call_detected = True
+            func_call["name"] = deltas.function_call.name or func_call["name"]
+            func_call["arguments"] += deltas.function_call.arguments or ""
+        
+        # Call the requested function if the call has finished.
+        if function_call_detected and choices[0].finish_reason == "function_call":
+            # Run the requested function and parse the new response.
+            function_response_generator = run_function(messages, func_call, api_version, model)
+            for function_response_chunk in function_response_generator:
+                function_deltas = getattr(function_response_chunk.choices[0], "delta", None) if function_response_chunk.choices else None
+                response_text = getattr(function_deltas, "content", "") or ""
+                response_obj = {
+                    "id": response_chunk.id,
+                    "model": response_chunk.model,
+                    "created": response_chunk.created,
+                    "object": response_chunk.object,
+                    "choices": [{
+                        "messages": [{
+                            "role": "assistant",
+                            "content": response_text
+                        }]
+                    }],
+                    "history_metadata": history_metadata
+                }
+                yield json.dumps(response_obj).replace("\n", "\\n") + "\n"
+        # Otherwise just append the content from the current response.
+        elif hasattr(deltas, "content") and not function_call_detected:
+            response_text = deltas.content or ""
             response_obj = {
-                "id": line.id,
-                "model": line.model,
-                "created": line.created,
-                "object": line.object,
+                "id": response_chunk.id,
+                "model": response_chunk.model,
+                "created": response_chunk.created,
+                "object": response_chunk.object,
                 "choices": [{
                     "messages": [{
                         "role": "assistant",
-                        "content": deltaText
+                        "content": response_text
                     }]
                 }],
                 "history_metadata": history_metadata
             }
-            yield format_as_ndjson(response_obj)
-
+            yield json.dumps(response_obj).replace("\n", "\\n") + "\n"
 
 def conversation_without_data(request_body, model, api_version):
     openai.api_type = "azure"
@@ -438,7 +555,9 @@ def conversation_without_data(request_body, model, api_version):
         top_p=float(AZURE_OPENAI_TOP_P),
         stop=AZURE_OPENAI_STOP_SEQUENCE.split("|") if AZURE_OPENAI_STOP_SEQUENCE else None,
         stream=SHOULD_STREAM,
-        timeout=60
+        timeout=60,
+        function_call="auto",
+        functions=FUNCTIONS
     )
 
     history_metadata = request_body.get("history_metadata", {})
@@ -460,7 +579,7 @@ def conversation_without_data(request_body, model, api_version):
 
         return jsonify(response_obj), 200
     else:
-        return Response(stream_without_data(response, history_metadata), mimetype='text/event-stream')
+        return Response(stream_without_data(response, messages, api_version, model, history_metadata), mimetype='text/event-stream')
 
 
 @app.route("/conversation", methods=["GET", "POST"])
